@@ -13,22 +13,21 @@
 #include <math.h>
 
 bool stopGuessing = false;
+int bitsPerLetter;
+uint32_t blackMask;
+uint32_t charMask;
 std::string bestGuess;
 std::string characterSet;
 std::vector<std::string> possiblePermutions;
 
 std::string intToString(uint32_t intRepresentation, int length)
 {
-	int bitsPerLetter = int(log2(characterSet.size()-1))+1;
-	uint32_t mask = 1;
-	for (int i = 1; i < bitsPerLetter; ++i)
-	{
-		mask = (mask << 1) + 1;
-	}
+	
+
 	std::string s = std::string(length, ' ');
 	for (int i = length - 1; i >= 0; --i)
 	{
-		s[i] = characterSet[intRepresentation&mask];
+		s[i] = characterSet[intRepresentation&charMask];
 		intRepresentation >>= bitsPerLetter;
 	}
 	return s;
@@ -36,7 +35,6 @@ std::string intToString(uint32_t intRepresentation, int length)
 
 uint32_t stringToInt(const std::string &s)
 {
-	int bitsPerLetter = int(log2(characterSet.size() - 1)) + 1;
 	uint32_t result = 0;
 	for (char c : s)
 	{
@@ -110,6 +108,41 @@ Result getGuessResult(const std::string &guess,const std::string &code,const std
 	{
 		r.rightColourWrongLocation += std::min(std::count(guess.begin(), guess.end(), c), std::count(code.begin(), code.end(), c));
 	}
+	return r;
+}
+
+uint64_t getCountsRepresentation(uint32_t code, int length)
+{
+	uint64_t lengthMask = (1ULL << length) - 1;//length 1s
+	uint64_t counts = 0;
+	for (int i = 0; i < length; ++i)
+	{
+		uint32_t num = charMask&(code >> (i*bitsPerLetter));
+		counts |= (counts << 1)&(lengthMask << (length*num));
+		counts |= 1ULL << (length*num);
+	}
+	return counts;
+}
+
+//use if (log2(length-1) + 1)*setSize < 32
+Result getGuessResult(uint32_t guess, uint32_t code,int length)
+{
+	uint32_t m = blackMask;
+	//count blacks
+	uint32_t leftover = ~(guess^code);//leftover will contain blocks of 1's for each match
+	m &= leftover;
+	for (int i = 1; i < bitsPerLetter;++i)
+	{
+		m = (m << 1) & leftover;
+	}
+	Result r;
+	r.rightColourRightLocation = __popcnt(m);
+
+	r.rightColourWrongLocation = __popcnt64(getCountsRepresentation(guess, length)&getCountsRepresentation(code, length));
+
+	r.rightColourWrongLocation -= r.rightColourRightLocation;
+	//count whites
+	
 	return r;
 }
 
@@ -216,6 +249,17 @@ int readFromCin(std::string &s)
 	return s.size();
 }
 
+void calculateCodeMetrics(int length)
+{
+	bitsPerLetter = int(log2(characterSet.size() - 1)) + 1;
+	charMask = (1 << bitsPerLetter) - 1;
+	blackMask = 1;
+	for (int i = 1; i < length; ++i)
+	{
+		blackMask = (blackMask << bitsPerLetter) + 1;
+	}
+}
+
 void computerGuessCode(int length, std::string set, std::thread &computer)
 {
 	while (true)
@@ -278,10 +322,8 @@ void humanGuessCode(int length, std::string set)
 	do {
 		std::string guess;
 		std::cin >> guess;
-		uint32_t guessAsInt = stringToInt(guess);
-		std::cout << guessAsInt << std::endl;
-		std::cout << intToString(guessAsInt,length) << std::endl;
-
+		
+		getGuessResult(stringToInt(guess), stringToInt(code),length);
 		r = getGuessResult(guess, code, set);
 		guesses++;
 		std::cout << "rCrL:" << r.rightColourRightLocation << "\trCwL:" << r.rightColourWrongLocation << std::endl;
@@ -323,6 +365,7 @@ int main()
 	}
 
 	std::cout << std::endl << "Code length is:" << codeLength << std::endl;
+	calculateCodeMetrics(codeLength);
 	std::thread computer(calculateBestGuess,codeLength, characterSet);
 	int option;
 	while (true)
