@@ -19,6 +19,25 @@ uint32_t charMask;
 std::string bestGuess;
 std::string characterSet;
 std::vector<std::string> possiblePermutions;
+std::vector<uint32_t> possiblePermutionsI;
+
+
+struct TinyTimer {
+	void reset() {
+		t = std::chrono::high_resolution_clock::now();
+	}
+
+	TinyTimer()
+	{
+		reset();
+	}
+
+	void printElapsedTime() {
+		auto current = std::chrono::high_resolution_clock::now();
+		std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(current - t).count()/double(std::nano::den) << std::endl;
+	}
+	std::chrono::steady_clock::time_point t;
+};
 
 std::string intToString(uint32_t intRepresentation, int length)
 {
@@ -60,6 +79,14 @@ struct Result {
 		rightColourWrongLocation(0) {}
 	int rightColourRightLocation;
 	int rightColourWrongLocation;
+	bool operator==(const Result &other)
+	{
+		return other.rightColourRightLocation == rightColourRightLocation&&other.rightColourWrongLocation == rightColourWrongLocation;
+	}
+	bool operator!=(const Result &other)
+	{
+		return !operator==(other);
+	}
 };
 
 std::string generateCode(int length, std::string characterSet)
@@ -87,6 +114,30 @@ std::vector<std::string> getAllPermutations(int length, std::string characterSet
 		for (std::string substring : substrings)
 		{
 			allPermutations.push_back(substring + c);
+		}
+	}
+	return allPermutations;
+}
+
+//get all possible permutations of l characters from a set of characters of size k 
+std::vector<uint32_t> getAllPermutations(int l, int k)
+{
+	if (l == 0)
+	{
+		std::vector<uint32_t> base;
+		base.push_back(0);
+		return base;
+	}
+	std::vector<uint32_t> allPermutations;
+	allPermutations.reserve(powI(k, l));
+	std::vector<uint32_t> substrings = getAllPermutations(l - 1, k);
+	uint32_t location = 1 << bitsPerLetter*(l-1);
+	for (int i = 0; i < k; ++i)
+	{
+		uint32_t thisCharacter = i*location;
+		for (uint32_t s : substrings)
+		{
+			allPermutations.push_back(s | thisCharacter);
 		}
 	}
 	return allPermutations;
@@ -202,9 +253,15 @@ void updatePossiblecodes(Result guessResult,const std::string &guess,const std::
 
 void calculateBestGuess(int length, std::string characterSet)
 {
+	
 	if (possiblePermutions.empty())
 	{
+		TinyTimer t;
 		possiblePermutions = getAllPermutations(length, characterSet);
+		t.printElapsedTime();
+		t.reset();
+		possiblePermutionsI = getAllPermutations(length, characterSet.size());
+		t.printElapsedTime();
 	}
 	int possibleResults = powI(2, length);
 	int *counts = new int[possibleResults];
@@ -212,20 +269,21 @@ void calculateBestGuess(int length, std::string characterSet)
 	double minScore = INFINITY;
 	for (int i = 0; i < 1000 && !stopGuessing; ++i)
 	{
-		std::string s = generateCode(length, characterSet);
+		uint32_t sI = possiblePermutionsI[rand() % possiblePermutions.size()];
+		//std::string s = generateCode(length, characterSet);
 		for (int i = 0; i < possibleResults; ++i) { counts[i] = 0; }
-		for (std::string g : possiblePermutions)
+		for (uint32_t gI : possiblePermutionsI)
 		{
-			Result res = getGuessResult(g, s, characterSet);
+			Result res = getGuessResult(gI, sI, length);//getGuessResult(g, s, characterSet);
 			counts[res.rightColourRightLocation*length + res.rightColourWrongLocation]++;
 		}
 		double score = calcScore(counts, possibleResults);
 		if (score < minScore)
 		{
 			minScore = score;
-			bestGuess = s;
+			bestGuess = intToString(sI,length);
+			std::cout << bestGuess << "\t" << minScore << std::endl;
 		}
-		//std::cout << i << std::endl;
 	}
 }
 
