@@ -79,6 +79,71 @@ struct Result {
 	}
 };
 
+struct Generator {
+	Generator(int length, int k)
+		:length(length), k(k), currentCode(0)
+	{
+		bitsPerLetter = int(log2(characterSet.size() - 1)) + 1;
+		charMask = (1 << bitsPerLetter) - 1;
+		blackMask = 1;
+		last = k;
+		for (int i = 1; i < length; ++i)
+		{
+			blackMask = (blackMask << bitsPerLetter) + 1;
+			last |= last << bitsPerLetter;
+		}
+		lengthMask = (1ULL << length) - 1;//length number of 1s
+		inverseHighCountMask = ~(lengthMask << (length*(k-1)));//the count mask for the high character.(~ since that's how it is used)
+		currentCharCounts = lengthMask;//initially the code is all zeros, meaning it is all the first character.
+		highChar = k - 1;
+	}
+
+	void next()
+	{
+		uint32_t high = highChar;
+		if ((high&currentCode) == high)//checks if least significant char is topChar
+		{	
+			int i = 0;
+			while ((high&currentCode) == high)
+			{
+				i += bitsPerLetter;
+				currentCode ^= high;//this zeroes it back to the bottom
+				high <<= bitsPerLetter;
+
+				currentCharCounts &= (currentCharCounts >> 1) | inverseHighCountMask;//remove one from the high count
+				currentCharCounts |= currentCharCounts + 1ULL; //add one to the low count
+			}
+
+
+			uint32_t num = ((charMask << i)&currentCode) >> i;//get the number whos count is to decremented
+			uint64_t countMask = lengthMask << length*num;//this mask sits on top of the counts for this num
+			currentCharCounts &= (currentCharCounts >> 1) | (~countMask);	//remove one from the char count of the old char	
+			currentCharCounts |= currentCharCounts + (1ULL << length*(num + 1));//adds one to the char count for the new char
+
+			currentCode += 1ULL << i;//increments by 1 bitshift to increment the right char
+		}
+		else {
+			uint32_t num = charMask & currentCode;//get the number whos count is to decremented
+			uint64_t countMask = lengthMask << length*num;//this mask sits on top of the counts for this num
+			currentCharCounts &= (currentCharCounts >> 1)|(~countMask);	//remove one from the char count of the old char	
+			currentCharCounts |= currentCharCounts + (1ULL << length*(num+1));//adds one to the char count for the new char
+
+			currentCode += 1ULL;//increments by 1
+		}
+	}
+	uint64_t lengthMask;
+	int length;
+	int k;
+	uint32_t currentCode;
+	uint64_t currentCharCounts;
+	uint64_t inverseHighCountMask;
+	uint32_t highChar;
+	int bitsPerLetter;
+	uint32_t blackMask;
+	uint32_t charMask;
+	uint32_t last;
+};
+
 //helper method for unique first guesses method
 //returns a set of all the unique guesses of length L
 //with access up to K letters and a minimum value of M
@@ -105,7 +170,7 @@ std::vector<std::vector<int>> f(int K, int L, int M)
 	return t;
 }
 //Calculates the unique set of all the possible first guesses
-//keeping in mind that only numbers of different character matters
+//keeping in mind that only numbers of different characters matters
 //I can't explain the maths used here it's based on several pages of scribblings
 std::vector<std::vector<int>> uniqueFirstGuesses(int K, int L)
 {
@@ -218,7 +283,7 @@ std::vector<uint32_t> getAllPermutations(int l, int k)
 
 uint64_t getCountsRepresentation(uint32_t code, int length)
 {
-	uint64_t lengthMask = (1ULL << length) - 1;//length 1s
+	uint64_t lengthMask = (1ULL << length) - 1;//length number of 1s
 	uint64_t counts = 0;
 	for (int i = 0; i < length; ++i)
 	{
@@ -300,21 +365,24 @@ void calculateBestGuess(int length, std::string characterSet)
 	
 	if (possibleCodes.empty())
 	{
-		TinyTimer t;
-		std::vector<uint32_t> codes = getAllPermutations(length, characterSet.size());
-		t.printElapsedTimeAndReset();
-		int size = sizeof(Code);
-		possibleCodes.reserve(sizeof(Code)*codes.size());
-		for (uint32_t code : codes)
-		{
-			possibleCodes.push_back(Code(code, getCountsRepresentation(code, length)));
-		}
-		t.printElapsedTime();
 		std::vector<Code> firstGuesses = getFirstGuessCodes(characterSet.size(), length);
+		Generator g(length, characterSet.size());
 		double minScore = INFINITY;
 		for (Code c : firstGuesses)
 		{
-			double score = getGuessScore(c, length);
+			int possibleResults = powI(2, length);
+			int *counts = new int[possibleResults];
+			for (int i = 0; i < possibleResults; ++i) { counts[i] = 0; }
+			Generator g(length, characterSet.size());
+			while(true)
+			{
+				Result res = getGuessResult(c.code, c.counts, g.currentCode, g.currentCharCounts);
+				counts[res.b*length + res.w]++;
+				if (g.currentCode == g.last)
+					break;
+				g.next();
+			}
+			double score = calcScore1(counts, possibleResults);
 			if (score < minScore)
 			{
 				minScore = score;
@@ -322,6 +390,7 @@ void calculateBestGuess(int length, std::string characterSet)
 				std::cout << intToString(bestGuess.code, length) << "\t" << minScore << std::endl;
 			}
 		}
+		
 	}
 	else
 	{
@@ -475,6 +544,7 @@ void humanGuessCode(int length, std::string set)
 
 int main()
 {
+	characterSet = "";
 	while (characterSet.empty())
 	{
 		std::cout << "Input character set:";
@@ -483,7 +553,7 @@ int main()
 	std::sort(characterSet.begin(), characterSet.end());
 	characterSet.erase(std::unique(characterSet.begin(), characterSet.end()), characterSet.end());
 	std::cout << std::endl << "Character set is:" << characterSet << std::endl;
-	
+
 	int codeLength;
 	while (true)
 	{
@@ -497,13 +567,15 @@ int main()
 			else if (pow(2, 32) < pow(characterSet.size(), codeLength))
 			{
 				std::cout << "Please, this problem is NP hard. Be reasonable." << std::endl;
-			}else{
+			}
+			else {
 				break;
 			}
 		}
 	}
 
 	std::cout << std::endl << "Code length is:" << codeLength << std::endl;
+
 	calculateCodeMetrics(codeLength);
 	std::thread computer(calculateBestGuess,codeLength, characterSet);
 	int option;
