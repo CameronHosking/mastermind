@@ -79,11 +79,77 @@ struct Result {
 	}
 };
 
+//helper method for unique first guesses method
+//returns a set of all the unique guesses of length L
+//with access up to K letters and a minimum value of M
+std::vector<std::vector<int>> f(int K, int L, int M)
+{
+	std::vector<std::vector<int>> t;
+	//base case
+	if (K == 1)
+	{
+		t.push_back(std::vector<int>());
+		t.at(0).push_back(L);
+		return t;
+	}
+
+	for (int i = M; i <= L/K; ++i)
+	{
+		std::vector<std::vector<int>> subset = f(K-1, L-i, i);
+		for (std::vector<int> s : subset)
+		{
+			t.push_back(s);
+			t.back().push_back(i);
+		}
+	}
+	return t;
+}
+//Calculates the unique set of all the possible first guesses
+//keeping in mind that only numbers of different character matters
+//I can't explain the maths used here it's based on several pages of scribblings
+std::vector<std::vector<int>> uniqueFirstGuesses(int K, int L)
+{
+	std::vector<std::vector<int>> t;
+	for (int i = 1; i <= K; ++i)
+	{
+		std::vector<std::vector<int>> subset = f(i, L, 1);
+		for (std::vector<int> s : subset)
+		{
+			t.push_back(s);
+		}
+	}
+	return t;
+}
+
+std::string getCodeWithGivenLetterDistribution(const std::vector<int> &dist)
+{
+	std::string validChars = characterSet;
+	std::string code;
+	for (int i : dist)
+	{
+		int charIndex = rng.next() % validChars.size();
+
+		code.append(i, validChars[charIndex]);
+		validChars.erase(charIndex,1);
+	}
+	std::random_shuffle(code.begin(), code.end());
+	return code;
+}
+
+std::vector<Code> getFirstGuessCodes(int K, int L)
+{
+	std::vector<std::vector<int>> u = uniqueFirstGuesses(K, L);
+	std::vector<Code> codes;
+	for (std::vector<int> dist : u)
+	{
+		std::string s = getCodeWithGivenLetterDistribution(dist);
+		codes.push_back(Code(s,s.size()));
+	}
+	return codes;
+}
 
 std::string intToString(uint32_t intRepresentation, int length)
 {
-	
-
 	std::string s = std::string(length, ' ');
 	for (int i = length - 1; i >= 0; --i)
 	{
@@ -216,6 +282,19 @@ void updatePossiblecodes(Result guessResult,const Code &guessedCode)
 	possibleCodes = newPossibleCodes;
 }
 
+double getGuessScore(Code s,int length)
+{
+	int possibleResults = powI(2, length);
+	int *counts = new int[possibleResults];
+	for (int i = 0; i < possibleResults; ++i) { counts[i] = 0; }
+	for (Code c : possibleCodes)
+	{
+		Result res = getGuessResult(c.code, c.counts, s.code, s.counts);
+		counts[res.b*length + res.w]++;
+	}
+	return calcScore1(counts, possibleResults);
+}
+
 void calculateBestGuess(int length, std::string characterSet)
 {
 	
@@ -231,26 +310,32 @@ void calculateBestGuess(int length, std::string characterSet)
 			possibleCodes.push_back(Code(code, getCountsRepresentation(code, length)));
 		}
 		t.printElapsedTime();
-	}
-	int possibleResults = powI(2, length);
-	int *counts = new int[possibleResults];
-	double minScore = INFINITY;
-	for (int i = 0; i < 10000 && !stopGuessing; ++i)
-	{
-		Code s = possibleCodes[rng.next() % possibleCodes.size()];
-		for (int i = 0; i < possibleResults; ++i) { counts[i] = 0; }
-		for (Code c : possibleCodes)
+		std::vector<Code> firstGuesses = getFirstGuessCodes(characterSet.size(), length);
+		double minScore = INFINITY;
+		for (Code c : firstGuesses)
 		{
-
-			Result res = getGuessResult(c.code, c.counts, s.code, s.counts);
-			counts[res.b*length + res.w]++;
+			double score = getGuessScore(c, length);
+			if (score < minScore)
+			{
+				minScore = score;
+				bestGuess = c;
+				std::cout << intToString(bestGuess.code, length) << "\t" << minScore << std::endl;
+			}
 		}
-		double score = calcScore1(counts, possibleResults);
-		if (score < minScore)
+	}
+	else
+	{
+		double minScore = INFINITY;
+		for (int i = 0; i < 10000 && !stopGuessing; ++i)
 		{
-			minScore = score;
-			bestGuess = s; 
-			std::cout << intToString(bestGuess.code,length) << "\t" << minScore << std::endl;
+			Code s = possibleCodes[rng.next() % possibleCodes.size()];
+			double score = getGuessScore(s, length);
+			if (score < minScore)
+			{
+				minScore = score;
+				bestGuess = s;
+				std::cout << intToString(bestGuess.code, length) << "\t" << minScore << std::endl;
+			}
 		}
 	}
 }
