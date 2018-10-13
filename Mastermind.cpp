@@ -1,7 +1,9 @@
 // Mastermind.cpp : Defines the entry point for the console application.
 //
 
+
 #include "stdafx.h"
+#include "PRNG\PRNG.h"
 
 #include <string>
 #include <vector>
@@ -12,15 +14,31 @@
 
 #include <math.h>
 
+uint64_t getCountsRepresentation(uint32_t code, int length);
+std::string intToString(uint32_t intRepresentation, int length);
+uint32_t stringToInt(const std::string &s);
+
+struct Code {
+	Code(uint32_t code = 0, uint64_t characterCounts = 0)
+		:code(code), counts(characterCounts)
+	{}
+	Code(const std::string &s,int length)
+		:code(stringToInt(s)), 
+		counts(getCountsRepresentation(code, length))
+	{}
+	uint32_t code;
+	uint64_t counts;
+};
+
 bool stopGuessing = false;
 int bitsPerLetter;
 uint32_t blackMask;
 uint32_t charMask;
-std::string bestGuess;
+Code bestGuess;
 std::string characterSet;
-std::vector<std::string> possiblePermutions;
-std::vector<uint32_t> possiblePermutionsI;
-
+std::vector<Code> possibleCodes;
+std::vector<uint64_t> possiblePermutatinsCharCounts;
+fastPRNG::PRNG rng;
 
 struct TinyTimer {
 	void reset() {
@@ -36,8 +54,31 @@ struct TinyTimer {
 		auto current = std::chrono::high_resolution_clock::now();
 		std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(current - t).count()/double(std::nano::den) << std::endl;
 	}
+
+	void printElapsedTimeAndReset()
+	{
+		printElapsedTime();
+		reset();
+	}
 	std::chrono::steady_clock::time_point t;
 };
+
+struct Result {
+	Result() :
+		b(0),
+		w(0) {}
+	int b;
+	int w;
+	bool operator==(const Result &other)
+	{
+		return other.b == b&&other.w == w;
+	}
+	bool operator!=(const Result &other)
+	{
+		return !operator==(other);
+	}
+};
+
 
 std::string intToString(uint32_t intRepresentation, int length)
 {
@@ -73,50 +114,16 @@ int64_t powI(int64_t x, int64_t p)
 	else return x * tmp * tmp;
 }
 
-struct Result {
-	Result() :
-		rightColourRightLocation(0),
-		rightColourWrongLocation(0) {}
-	int rightColourRightLocation;
-	int rightColourWrongLocation;
-	bool operator==(const Result &other)
-	{
-		return other.rightColourRightLocation == rightColourRightLocation&&other.rightColourWrongLocation == rightColourWrongLocation;
-	}
-	bool operator!=(const Result &other)
-	{
-		return !operator==(other);
-	}
-};
+
 
 std::string generateCode(int length, std::string characterSet)
 {
 	std::string code;
 	for (int i = 0; i < length; ++i)
 	{
-		code.append(1,characterSet.at(rand() % characterSet.size()));
+		code.append(1,characterSet.at(rng.getUint32() % characterSet.size()));
 	}
 	return code;
-}
-std::vector<std::string> getAllPermutations(int length, std::string characterSet)
-{
-	if (length == 0)
-	{
-		std::vector<std::string> base;
-		base.push_back("");
-		return base;
-	}
-	std::vector<std::string> allPermutations;
-	allPermutations.reserve(powI(characterSet.size(),length));
-	std::vector<std::string> substrings = getAllPermutations(length - 1, characterSet);
-	for(char c : characterSet)
-	{
-		for (std::string substring : substrings)
-		{
-			allPermutations.push_back(substring + c);
-		}
-	}
-	return allPermutations;
 }
 
 //get all possible permutations of l characters from a set of characters of size k 
@@ -143,25 +150,6 @@ std::vector<uint32_t> getAllPermutations(int l, int k)
 	return allPermutations;
 }
 
-Result getGuessResult(const std::string &guess,const std::string &code,const std::string &characterSet)
-{
-	Result r;
-	for (int i = 0; i < code.size(); ++i)
-	{
-		if (guess.at(i) == code.at(i))
-		{
-			r.rightColourRightLocation++;
-			r.rightColourWrongLocation--;//since we will count these again in the next step;
-		}
-	}
-
-	for (char c : characterSet)
-	{
-		r.rightColourWrongLocation += std::min(std::count(guess.begin(), guess.end(), c), std::count(code.begin(), code.end(), c));
-	}
-	return r;
-}
-
 uint64_t getCountsRepresentation(uint32_t code, int length)
 {
 	uint64_t lengthMask = (1ULL << length) - 1;//length 1s
@@ -176,7 +164,7 @@ uint64_t getCountsRepresentation(uint32_t code, int length)
 }
 
 //use if (log2(length-1) + 1)*setSize < 32
-Result getGuessResult(uint32_t guess, uint32_t code,int length)
+Result getGuessResult(uint32_t guess, uint64_t guessCharacterCounts, uint32_t code, uint64_t codeCharacterCounts)
 {
 	uint32_t m = blackMask;
 	//count blacks
@@ -187,39 +175,16 @@ Result getGuessResult(uint32_t guess, uint32_t code,int length)
 		m = (m << 1) & leftover;
 	}
 	Result r;
-	r.rightColourRightLocation = __popcnt(m);
+	r.b = __popcnt(m);
 
-	r.rightColourWrongLocation = __popcnt64(getCountsRepresentation(guess, length)&getCountsRepresentation(code, length));
+	r.w = __popcnt64(guessCharacterCounts&codeCharacterCounts);
 
-	r.rightColourWrongLocation -= r.rightColourRightLocation;
+	r.w -= r.b;
 	//count whites
 	
 	return r;
 }
 
-bool resultMatch(Result &guessResult, const std::string &guess, const std::string &code, const std::string &characterSet)
-{
-	int rightColourRightLocation = 0;
-	int rightColourWrongLocation = 0;
-	for (int i = 0; i < code.size(); ++i)
-	{
-		if (guess.at(i) == code.at(i))
-		{
-			rightColourRightLocation++;
-			rightColourWrongLocation--;//since we will count these again in the next step;
-		}
-	}
-	if (rightColourRightLocation != guessResult.rightColourRightLocation)
-		return false;
-	for (char c : characterSet)
-	{
-		rightColourWrongLocation += std::min(std::count(guess.begin(), guess.end(), c), std::count(code.begin(), code.end(), c));
-	}
-	if (rightColourWrongLocation != guessResult.rightColourWrongLocation)
-		return false;
-
-	return true;
-}
 double calcScore1(int* counts, int num)
 {
 	double max = 0;
@@ -240,49 +205,52 @@ double calcScore(int* counts, int num)
 	return squaredSum;
 }
 
-void updatePossiblecodes(Result guessResult,const std::string &guess,const std::string &characterSet)
+void updatePossiblecodes(Result guessResult,const Code &guessedCode)
 {
-	std::vector<std::string> newPossibleCodes;
-	for (std::string s : possiblePermutions)
+	std::vector<Code> newPossibleCodes;
+	for (Code c : possibleCodes)
 	{
-		if (resultMatch(guessResult,guess, s, characterSet))
-			newPossibleCodes.push_back(s);
+		if (guessResult== getGuessResult(guessedCode.code,guessedCode.counts,c.code,c.counts))
+			newPossibleCodes.push_back(c);
 	}
-	possiblePermutions = newPossibleCodes;
+	possibleCodes = newPossibleCodes;
 }
 
 void calculateBestGuess(int length, std::string characterSet)
 {
 	
-	if (possiblePermutions.empty())
+	if (possibleCodes.empty())
 	{
 		TinyTimer t;
-		possiblePermutions = getAllPermutations(length, characterSet);
-		t.printElapsedTime();
-		t.reset();
-		possiblePermutionsI = getAllPermutations(length, characterSet.size());
+		std::vector<uint32_t> codes = getAllPermutations(length, characterSet.size());
+		t.printElapsedTimeAndReset();
+		int size = sizeof(Code);
+		possibleCodes.reserve(sizeof(Code)*codes.size());
+		for (uint32_t code : codes)
+		{
+			possibleCodes.push_back(Code(code, getCountsRepresentation(code, length)));
+		}
 		t.printElapsedTime();
 	}
 	int possibleResults = powI(2, length);
 	int *counts = new int[possibleResults];
-	bestGuess = "";
 	double minScore = INFINITY;
-	for (int i = 0; i < 1000 && !stopGuessing; ++i)
+	for (int i = 0; i < 10000 && !stopGuessing; ++i)
 	{
-		uint32_t sI = possiblePermutionsI[rand() % possiblePermutions.size()];
-		//std::string s = generateCode(length, characterSet);
+		Code s = possibleCodes[rng.next() % possibleCodes.size()];
 		for (int i = 0; i < possibleResults; ++i) { counts[i] = 0; }
-		for (uint32_t gI : possiblePermutionsI)
+		for (Code c : possibleCodes)
 		{
-			Result res = getGuessResult(gI, sI, length);//getGuessResult(g, s, characterSet);
-			counts[res.rightColourRightLocation*length + res.rightColourWrongLocation]++;
+
+			Result res = getGuessResult(c.code, c.counts, s.code, s.counts);
+			counts[res.b*length + res.w]++;
 		}
-		double score = calcScore(counts, possibleResults);
+		double score = calcScore1(counts, possibleResults);
 		if (score < minScore)
 		{
 			minScore = score;
-			bestGuess = intToString(sI,length);
-			std::cout << bestGuess << "\t" << minScore << std::endl;
+			bestGuess = s; 
+			std::cout << intToString(bestGuess.code,length) << "\t" << minScore << std::endl;
 		}
 	}
 }
@@ -334,35 +302,41 @@ void computerGuessCode(int length, std::string set, std::thread &computer)
 	int guesses = 0;
 	while (true)
 	{
-		std::cout << bestGuess << std::endl;
+		std::cout << intToString(bestGuess.code,length) << std::endl;
 		guesses++;
-		int rCrL;
+		int black;
 		while (true)
 		{
-			std::cout << "rCrL:";
-			if (readFromCin(rCrL) && rCrL <= length && rCrL >= 0);
+			std::cout << "black:";
+			if (readFromCin(black) && black <= length && black >= 0);
 			break;
 		}
-		if (rCrL == length) {
+		if (black == length) {
 			break;
 		}
-		int rCwL;
+		int white;
 		while (true)
 		{
-			std::cout << "rCwL:";
-			if (readFromCin(rCwL) && rCrL + rCwL <= length && rCwL >= 0);
+			std::cout << "white:";
+			if (readFromCin(white) && black + white <= length && white >= 0);
 			break;
 		}
 		std::cout << "OK... thinking ..." << std::endl;
 		Result r;
-		r.rightColourRightLocation = rCrL;
-		r.rightColourWrongLocation = rCwL;
-		updatePossiblecodes(r, bestGuess, set);
-		if (possiblePermutions.size() == 1)
+		r.b = black;
+		r.w = white;
+		updatePossiblecodes(r, bestGuess);
+		if (possibleCodes.size() == 1)
 		{
-			bestGuess = possiblePermutions.at(0);
+			bestGuess = possibleCodes.at(0);
 		}
-		else{
+		else if (possibleCodes.empty()) 
+		{
+			std::cout << "You've lied to me." << std::endl;
+			break;
+		}
+		else
+		{
 			calculateBestGuess(length, set);
 		}
 	}
@@ -372,20 +346,43 @@ void computerGuessCode(int length, std::string set, std::thread &computer)
 
 }
 
+bool validateGuess(std::string guess, int length)
+{
+	if (guess.size() != length)
+		return false;
+	for (char c : guess)
+	{
+		if (characterSet.find(c) == std::string::npos)
+			return false;
+	}
+	return true;
+}
+
 void humanGuessCode(int length, std::string set)
 {
-	std::string code = generateCode(length, set);
+	Code code(generateCode(length, set),length);
 	Result r;
 	int guesses = 0;
+	std::cout << "What is your first guess?" << std::endl;
 	do {
-		std::string guess;
-		std::cin >> guess;
-		
-		getGuessResult(stringToInt(guess), stringToInt(code),length);
-		r = getGuessResult(guess, code, set);
+		std::string guessString;
+		while (true)
+		{
+			readFromCin(guessString);
+			if (validateGuess(guessString, length))
+			{
+				break;
+			}
+			else
+			{
+				std::cout << "Your guess must consist of " << length << " character"<<((length>1)?"s":"")<<" from the set {" << characterSet << "}." << std::endl;
+			}	
+		}
+		Code guess(guessString,length);
+		r = getGuessResult(code.code, code.counts, guess.code, guess.counts);
 		guesses++;
-		std::cout << "rCrL:" << r.rightColourRightLocation << "\trCwL:" << r.rightColourWrongLocation << std::endl;
-	} while (r.rightColourRightLocation < length);
+		std::cout << guessString <<"\tblack:" << r.b << "\twhite:" << r.w << std::endl;
+	} while (r.b < length);
 	std::cout << "congratualtions that is the code!" << std::endl;
 	std::cout << "It took you " << guesses << " round" << ((guesses == 1) ? "." : "s.") << std::endl;
 	std::cin >> set;
@@ -393,7 +390,6 @@ void humanGuessCode(int length, std::string set)
 
 int main()
 {
-	srand(std::chrono::system_clock::now().time_since_epoch().count());
 	while (characterSet.empty())
 	{
 		std::cout << "Input character set:";
